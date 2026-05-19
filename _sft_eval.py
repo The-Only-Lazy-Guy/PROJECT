@@ -117,9 +117,22 @@ def parse_args():
 # v3.5 parsing
 _REASONING_RE = re.compile(r"<reasoning>(.*?)</reasoning>", re.DOTALL | re.IGNORECASE)
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL | re.IGNORECASE)
+
+# Meta-leak detection: phrases that genuinely betray the existence of an
+# internal reference structure to the user. We deliberately exclude generic
+# English phrases that have legitimate domain uses:
+#   - "the reference"  -> matches "the reference density", "the reference
+#                         frame", "the reference temperature" etc. (false +)
+#   - "the context"    -> matches "in the context of the problem" (false +)
+# Both produced spurious leaks in run #1 against domain-physics answers
+# where the word "reference" is the canonical name of a constant.
 _META_LEAK_RE = re.compile(
-    r"\b(the knowledge graph|the graph|the context|the reference|the nodes|"
-    r"the absorbed material|the anchors|node id|UNKNOWN section|reasoning above)\b",
+    r"\b(the knowledge graph|the graph|the nodes|"
+    r"the absorbed material|the absorbed knowledge|the anchors|"
+    r"the reference material|the reference document|the reference text|"
+    r"the context above|the context below|the context provided|"
+    r"node id|UNKNOWN section|reasoning above|"
+    r"the (?:above|provided) material)\b",
     re.IGNORECASE,
 )
 
