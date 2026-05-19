@@ -1,0 +1,59 @@
+================================================================================
+GRAPH=astro1_vrelman  ROUND=round0_big_pickle  TOK=4020
+================================================================================
+--- USER ---
+# Reference material
+
+## Facts
+
+### [vrelman_skarnholm_dynamics_hub] type=summary
+Vrelman-Skarnholm dynamics describes the slow orbital decay of bound stellar clusters under the combined influence of Vrelman radiation pressure (a non-gravitational drag that scales with cluster mass and orientation) and Skarnholm equivalence (which sets the stability boundary). Time-to-collapse problems are solved in three steps: compute the Vrelman flux, then the orbital decay rate, then divide separation by decay rate.
+
+### [vrelman_flux_formula] type=fact
+Vrelman flux on a stellar cluster: Phi_V = kappa_v * 
+...[truncated]...
+
+--- ASSISTANT ---
+<reasoning>
+GOAL: Compute time-to-collapse tau for a binary stellar cluster using Vrelman-Skarnholm dynamics with given r=2.0e15 m, M=5.0e29 kg, theta=45 deg.
+
+KNOWN (from the graph):
+- Vrelman flux: Phi_V = kappa_v * M * sin^2(theta) / r^2, with kappa_v = 1.0e-3
+- Orbital decay rate: |dr/dt| = alpha_v * Phi_V * r^3 / (G * M^2), with alpha_v = 1.0e-8, G = 6.67e-11
+- Time-to-collapse: tau = r / |dr/dt|
+- sin^2(45 deg) = 0.5 from orientation angle convention (sin^2(theta))
+- Step 1-2-3 solution procedure: compute flux, then decay rate, then divide separation by decay rate
+- The stability boundar
+...[truncated]...
+
+================================================================================
+GRAPH=fic1_quill  ROUND=round0_big_pickle  TOK=3080
+================================================================================
+--- USER ---
+# Reference material
+
+## Facts
+
+### [quill_materials_hub] type=summary
+Quill-bonded matter is a fictional class of solids whose bond-energy density scales with the CUBE of strain (not the square, as in Hookean elasticity) and is modulated by temperature through the Quill thermal sensitivity. Fracture occurs when the bond-energy density exceeds a fixed critical value.
+
+### [quill_bond_energy_formula] type=fact
+Bond-energy density: u_q = (K_q / 3) * epsilon^3 * (1 + chi_q * (T - T_ref)). Here epsilon is the strain (dimensionless), T is the temperature in kelvin, T_ref = 300 K is the reference te
+...[truncated]...
+
+--- ASSISTANT ---
+<reasoning>
+GOAL: Compute bond-energy density u_q and determine fracture for epsilon=0.005, T=350 K.
+
+KNOWN (from the graph):
+- Quill formula: u_q = (K_q/3) * epsilon^3 * (1 + chi_q * (T - T_ref))
+- K_q = 3.0e12 Pa, chi_q = 4.0e-3 / K, T_ref = 300 K, u_crit = 8.0e5 J/m^3
+- Strain enters as cube (not square), so doubling strain multiplies energy by 8
+- Thermal factor at T=400 K is 1.4, at T=250 K is 0.8 — implying linear interpolation
+- Fracture when u_q >= u_crit; safe when u_q < u_crit
+
+UNKNOWN (graph is silent on these but you need them):
+- none (all constants and procedure are supplied)
+
+HY
+...[truncated]...

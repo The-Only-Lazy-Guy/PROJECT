@@ -1,0 +1,33 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Training artifacts — produced on the rental box, not for version control
+adapters/
+results/
+cache/
+runs/
+wandb/
+checkpoint-*/
+
+# Local model files (too large for git)
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Raw trace data — only the prepared corpus (data/sft_dataset/) belongs in git
+data/sft_traces/
+data/sft_traces_partial/
+data/sft_traces_partial_round2/
+data/sft_traces_partial_round3/
+data/sft_traces_expanded/
+
+# Misc local state
+.venv/
+venv/
+*.log
+.DS_Store

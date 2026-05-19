@@ -1,0 +1,25 @@
+{
+  "n_examples": 98,
+  "by_graph": {
+    "astro1_vrelman": 13,
+    "fic1_quill": 18,
+    "fic2_mraxon": 18,
+    "fic3_karth": 16,
+    "fic4_vexholm": 16,
+    "fic5_tenrek": 17
+  },
+  "by_round": {
+    "round0_big_pickle": 6,
+    "round1_no_pool": 6,
+    "round2_small_pool": 6,
+    "round3_larger_pool": 5,
+    "expanded": 75
+  },
+  "token_count_min": 2317,
+  "token_count_max": 4035,
+  "token_count_mean": 2973,
+  "max_seq_length_cap": 4096,
+  "skipped_graphs": [
+    "cs4"
+  ]
+}
