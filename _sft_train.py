@@ -146,8 +146,15 @@ def main():
     train_recs, eval_recs = load_dataset(
         args.dataset, args.eval_split_ratio, args.seed,
     )
+    # Merge eval back into train. In-training eval blows VRAM on V100s
+    # because eval forwards don't use gradient checkpointing / padding-free
+    # and the SDPA attention matrix at 4K context allocates 15+ GiB on top
+    # of the 20 GiB the model already holds. Eval loss on 9 examples is
+    # noisy anyway — real generalization is measured by _sft_eval.py on
+    # the held-out eval graphs.
+    train_recs = train_recs + eval_recs
+    print(f"  (merged eval split back into train: {len(train_recs)} total examples for training)")
     train_ds = to_hf_dataset(train_recs, tokenizer)
-    eval_ds = to_hf_dataset(eval_recs, tokenizer)
 
     sft_config = SFTConfig(
         output_dir=str(out_dir),
@@ -159,13 +166,8 @@ def main():
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
         logging_steps=5,
-        save_strategy="steps",
-        save_steps=args.save_steps,
-        eval_strategy="steps",
-        eval_steps=args.save_steps,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
+        save_strategy="epoch",             # save once per epoch (small corpus: 2 saves total)
+        eval_strategy="no",                # see note above; held-out eval lives in _sft_eval.py
         optim="paged_adamw_8bit",
         weight_decay=args.weight_decay,
         lr_scheduler_type="cosine",
@@ -193,7 +195,6 @@ def main():
 
     print(f"\nLaunching SFTTrainer...")
     print(f"  Train: {len(train_ds)} examples")
-    print(f"  Eval:  {len(eval_ds)} examples")
     print(f"  Effective batch: {args.per_device_batch_size * args.grad_accum_steps}")
     print(f"  Total epochs: {args.num_epochs}")
 
@@ -201,21 +202,28 @@ def main():
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_ds,
-        eval_dataset=eval_ds,
         args=sft_config,
         callbacks=[LossLogger()],
     )
 
-    trainer_stats = trainer.train()
+    # Save-in-finally guard. If anything in the inner training loop raises
+    # (typical culprits: OOM during a late forward, NaN loss), we still
+    # persist whatever weights we have so the run isn't wasted.
+    trainer_stats = None
+    try:
+        trainer_stats = trainer.train()
+    except Exception as exc:
+        print(f"\n[!] trainer.train() raised: {type(exc).__name__}: {exc}")
+        print(f"[!] Attempting to save partial adapter so the run is not lost.")
 
-    print(f"\nTraining complete. Stats:")
-    print(json.dumps({
-        "train_runtime_seconds": trainer_stats.metrics.get("train_runtime"),
-        "train_loss": trainer_stats.metrics.get("train_loss"),
-        "epochs_completed": trainer_stats.metrics.get("epoch"),
-    }, indent=2))
+    if trainer_stats is not None:
+        print(f"\nTraining complete. Stats:")
+        print(json.dumps({
+            "train_runtime_seconds": trainer_stats.metrics.get("train_runtime"),
+            "train_loss": trainer_stats.metrics.get("train_loss"),
+            "epochs_completed": trainer_stats.metrics.get("epoch"),
+        }, indent=2))
 
-    # Save the final adapter (best-checkpoint already loaded via load_best_model_at_end).
     print(f"\nSaving final adapter to {out_dir}")
     model.save_pretrained(str(out_dir))
     tokenizer.save_pretrained(str(out_dir))
