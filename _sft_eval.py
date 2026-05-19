@@ -100,7 +100,7 @@ EVAL_CELLS: list[tuple[str, str, str, list[str]]] = [
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base_model", default="unsloth/Qwen3-4B-Instruct-2507")
-    ap.add_argument("--adapter", required=True, help="Trained adapter directory")
+    ap.add_argument("--adapter", help="Trained adapter directory (required unless --rescore_from is given)")
     ap.add_argument("--output_path", default="results/eval.json")
     ap.add_argument("--also_baseline", action="store_true",
                     help="Also run the base model alone for side-by-side comparison")
@@ -108,6 +108,9 @@ def parse_args():
     ap.add_argument("--temperature", type=float, default=0.3)
     ap.add_argument("--max_seq_length", type=int, default=4096)
     ap.add_argument("--max_new_tokens", type=int, default=2048)
+    ap.add_argument("--rescore_from",
+                    help="Skip generation; reload an existing eval JSON and recompute the rubric only. "
+                         "Use this to apply scoring fixes without burning GPU time. No model loading required.")
     return ap.parse_args()
 
 
@@ -122,11 +125,19 @@ _META_LEAK_RE = re.compile(
 
 
 def split_response(content: str) -> tuple[str, str]:
-    rm = _REASONING_RE.search(content)
-    am = _ANSWER_RE.search(content)
+    """Extract the model's reasoning + answer from raw generation output.
+
+    Important: take the LAST occurrence of each block, not the first. The
+    raw_content can contain the prompt directive's placeholder blocks
+    ('<answer>... natural-language answer for the user ...</answer>')
+    before the model's actual generation. The model's real output is
+    always the last block in the string.
+    """
+    rs = _REASONING_RE.findall(content)
+    as_ = _ANSWER_RE.findall(content)
     return (
-        rm.group(1).strip() if rm else "",
-        am.group(1).strip() if am else content.strip(),
+        rs[-1].strip() if rs else "",
+        as_[-1].strip() if as_ else content.strip(),
     )
 
 
@@ -163,86 +174,8 @@ def load_node_ids(graph_stem: str) -> set[str]:
     return {n["id"] for n in g.get("nodes", [])}
 
 
-def main():
-    args = parse_args()
-    out_path = Path(args.output_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not EVAL_CELLS:
-        print("ERROR: No EVAL_CELLS defined yet. Populate the EVAL_CELLS list in _sft_eval.py")
-        print("after building the held-out eval graphs (eval1_*, eval2_*, eval3_*).")
-        return
-
-    from _anchor_filtered_prompt import build_v35_prompt_filtered
-
-    print("Importing unsloth, transformers...")
-    from unsloth import FastLanguageModel
-
-    def load_model_with_adapter(adapter_path: str | None):
-        print(f"Loading base: {args.base_model}    adapter: {adapter_path or '<none>'}")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=args.base_model,
-            max_seq_length=args.max_seq_length,
-            load_in_4bit=True,
-            dtype=None,
-        )
-        if adapter_path:
-            model.load_adapter(adapter_path, adapter_name="trained")
-            model.set_adapter("trained")
-        FastLanguageModel.for_inference(model)
-        return model, tokenizer
-
-    def generate(model, tokenizer, prompt: str) -> str:
-        messages = [{"role": "user", "content": prompt}]
-        text = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-        inputs = tokenizer(text, return_tensors="pt").to(model.device)
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            do_sample=True,
-            top_p=0.9,
-        )
-        full = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        # Strip the prompt prefix off the front
-        return full[len(text):] if full.startswith(text) else full
-
-    runs: list[dict[str, Any]] = []
-
-    for model_label, adapter_path in [
-        ("trained", args.adapter),
-        ("baseline", None) if args.also_baseline else (None, None),
-    ]:
-        if model_label is None:
-            continue
-        model, tokenizer = load_model_with_adapter(adapter_path)
-        for cell_idx, (graph_stem, qkey, question, probes) in enumerate(EVAL_CELLS, 1):
-            graph_path = f"graphs/{graph_stem}.json"
-            prompt, _ = build_v35_prompt_filtered(
-                question, graph_path,
-                k_anchors=12, hop=1,
-                inject_hypothesis_pool=False,
-            )
-            node_ids = load_node_ids(graph_stem)
-            for sample_idx in range(1, args.samples_per_cell + 1):
-                print(f"[{model_label}] cell {cell_idx}/{len(EVAL_CELLS)} sample {sample_idx}: {graph_stem}::{qkey}")
-                t0 = time.perf_counter()
-                content = generate(model, tokenizer, prompt)
-                dt = time.perf_counter() - t0
-                rb = score_response(content, probes, node_ids)
-                runs.append({
-                    "model_label": model_label,
-                    "graph_stem": graph_stem,
-                    "question_key": qkey,
-                    "sample_idx": sample_idx,
-                    "wall_sec": round(dt, 2),
-                    "raw_content": content,
-                    "rubric": rb,
-                })
-
-    # Summarize by model_label + cell
+def _summarize_and_write(runs: list[dict[str, Any]], out_path: Path, args) -> None:
+    """Aggregate per-run rubric into a summary block and write final JSON."""
     summary: dict[str, dict[str, Any]] = {}
     for r in runs:
         key = r["model_label"]
@@ -277,6 +210,117 @@ def main():
         print(f"  meta leaked            : {s['meta_leak']}/{n}")
         print(f"  node_id leaked         : {s['node_id_leak']}/{n}")
         print(f"  mean wall              : {s['total_wall_sec']/n:.1f}s")
+
+
+def main():
+    args = parse_args()
+    out_path = Path(args.output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not EVAL_CELLS:
+        print("ERROR: No EVAL_CELLS defined yet. Populate the EVAL_CELLS list in _sft_eval.py")
+        print("after building the held-out eval graphs (eval1_*, eval2_*, eval3_*).")
+        return
+
+    # Re-score path: skip the model entirely, just reload an existing JSON
+    # and recompute the rubric (using the now-fixed split_response). This
+    # lets us fix the scoring bug without re-burning GPU time.
+    if args.rescore_from:
+        src = Path(args.rescore_from)
+        print(f"Re-scoring from existing eval JSON: {src}")
+        data = json.loads(src.read_text(encoding="utf-8"))
+        cell_probes = {(g, q): probes for g, q, _, probes in EVAL_CELLS}
+        node_id_cache: dict[str, set[str]] = {}
+        new_runs = []
+        for r in data["runs"]:
+            gstem = r["graph_stem"]
+            probes = cell_probes.get((gstem, r["question_key"]), [])
+            if gstem not in node_id_cache:
+                node_id_cache[gstem] = load_node_ids(gstem)
+            r2 = dict(r)
+            r2["rubric"] = score_response(r["raw_content"], probes, node_id_cache[gstem])
+            new_runs.append(r2)
+        _summarize_and_write(new_runs, out_path, args)
+        return
+
+    if not args.adapter:
+        print("ERROR: --adapter is required for live evaluation. "
+              "(For offline re-scoring, use --rescore_from <path>.)")
+        return
+
+    from _anchor_filtered_prompt import build_v35_prompt_filtered
+
+    print("Importing unsloth, transformers...")
+    from unsloth import FastLanguageModel
+
+    def load_model_with_adapter(adapter_path: str | None):
+        print(f"Loading base: {args.base_model}    adapter: {adapter_path or '<none>'}")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=args.base_model,
+            max_seq_length=args.max_seq_length,
+            load_in_4bit=True,
+            dtype=None,
+        )
+        if adapter_path:
+            model.load_adapter(adapter_path, adapter_name="trained")
+            model.set_adapter("trained")
+        FastLanguageModel.for_inference(model)
+        return model, tokenizer
+
+    def generate(model, tokenizer, prompt: str) -> str:
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        inputs = tokenizer(text, return_tensors="pt").to(model.device)
+        prompt_token_len = inputs.input_ids.shape[1]
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            do_sample=True,
+            top_p=0.9,
+        )
+        # Slice tokens, not characters: chat templates inject special tokens
+        # that cause decoded-prefix mismatches when string-slicing. Skip the
+        # input tokens and decode only the model's continuation.
+        generated = outputs[0][prompt_token_len:]
+        return tokenizer.decode(generated, skip_special_tokens=True)
+
+    runs: list[dict[str, Any]] = []
+
+    for model_label, adapter_path in [
+        ("trained", args.adapter),
+        ("baseline", None) if args.also_baseline else (None, None),
+    ]:
+        if model_label is None:
+            continue
+        model, tokenizer = load_model_with_adapter(adapter_path)
+        for cell_idx, (graph_stem, qkey, question, probes) in enumerate(EVAL_CELLS, 1):
+            graph_path = f"graphs/{graph_stem}.json"
+            prompt, _ = build_v35_prompt_filtered(
+                question, graph_path,
+                k_anchors=12, hop=1,
+                inject_hypothesis_pool=False,
+            )
+            node_ids = load_node_ids(graph_stem)
+            for sample_idx in range(1, args.samples_per_cell + 1):
+                print(f"[{model_label}] cell {cell_idx}/{len(EVAL_CELLS)} sample {sample_idx}: {graph_stem}::{qkey}")
+                t0 = time.perf_counter()
+                content = generate(model, tokenizer, prompt)
+                dt = time.perf_counter() - t0
+                rb = score_response(content, probes, node_ids)
+                runs.append({
+                    "model_label": model_label,
+                    "graph_stem": graph_stem,
+                    "question_key": qkey,
+                    "sample_idx": sample_idx,
+                    "wall_sec": round(dt, 2),
+                    "raw_content": content,
+                    "rubric": rb,
+                })
+
+    _summarize_and_write(runs, out_path, args)
 
 
 if __name__ == "__main__":
