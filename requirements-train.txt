@@ -1,27 +1,43 @@
 # Minimal install for SFT training + eval + GGUF export on a rental GPU.
-# Tested target: RTX 4090 / A4000 / A100 with CUDA 12.x.
-# Install with:  pip install -r requirements-train.txt
 #
-# Note: unsloth bundles its own pinned versions of torch, transformers, trl,
-# peft, bitsandbytes, accelerate. Use the official unsloth install line for
-# the GPU + CUDA combo you're targeting, then layer the rest on top.
+# IMPORTANT: most rental boxes (RunPod, Lambda, Vast) ship a CUDA base image
+# with torch + CUDA toolkit ALREADY installed (often torch 2.11 + cu130 in
+# 2026). Do NOT let pip downgrade torch — it will break ABI compatibility
+# with the box's CUDA libraries and trigger flash-attn build failures.
+#
+# Two-step install on a torch-preinstalled box (use this on the rental):
+#
+#     # 1. unsloth, but DO NOT touch the existing torch
+#     pip install --no-deps unsloth
+#
+#     # 2. dependencies that are compatible with whatever torch is there
+#     pip install -r requirements-train.txt
+#
+# On a clean box with no torch yet, install unsloth's pinned bundle first
+# (pick the line matching your CUDA + GPU), then `pip install -r ...`:
+#
+#     pip install "unsloth[cu121-ampere-torch240]"     # cu12.1 + Ampere + torch 2.4
+#     pip install "unsloth[cu124-ampere-torch251]"     # cu12.4 + Ampere + torch 2.5.1
+#     # then the deps file below
+#
+# Either way, DO NOT install flash-attn. unsloth falls back to PyTorch SDPA
+# attention, which is nearly identical speed on a 4B model at 4K context
+# and avoids a 30-minute source build that frequently fails on rentals.
 
-# Core: unsloth (which pulls torch, transformers, trl, peft, bnb, accelerate).
-# Pick ONE of the install lines below based on your GPU; the others are stale.
-unsloth[cu121-ampere-torch240]
-# unsloth[cu121-torch240]                  # alternate
-# unsloth[colab-new]                       # colab
+# Core libs unsloth needs at runtime. Versions chosen to be compatible
+# with torch >= 2.4 through torch 2.11.
+transformers>=4.46
+trl>=0.12
+peft>=0.13
+bitsandbytes>=0.44
+accelerate>=1.0
+datasets>=2.20
 
-# Used by _sft_prepare_data.py (already installed locally; needed on rental
-# if you re-run prep there).
-huggingface_hub>=0.20
+# Used by _sft_prepare_data.py (chat template / tokenizer).
+huggingface_hub>=0.24
 sentencepiece>=0.1.99
 tiktoken>=0.5
 protobuf>=4.21
-
-# Used by _sft_export_to_gguf.py — unsloth pulls llama.cpp tooling, but
-# pin the converter package explicitly to be safe.
-# (No explicit pin — unsloth ships llama.cpp converters via its extras.)
 
 # Light utilities used by our scripts.
 numpy>=1.24

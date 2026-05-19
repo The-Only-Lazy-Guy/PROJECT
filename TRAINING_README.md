@@ -8,35 +8,52 @@ The corpus is pre-built and checked in at `data/sft_dataset/train.jsonl` (98 exa
 
 ## Quick start on a rental GPU
 
-```bash
-# 1. Clone this branch
-git clone -b sft-training <repo-url>
-cd graph_final
+Most rental boxes (RunPod, Lambda, Vast) come with a CUDA base image
+where **torch + CUDA are already installed** (often torch 2.11 + cu130
+in 2026). Don't let pip downgrade torch — it breaks the box's pre-tuned
+CUDA stack and trips a flash-attn build failure. Use the two-step install:
 
-# 2. Install (assumes CUDA 12.x; pick the right unsloth extras for your card)
+```bash
+# 1. Clone (single-branch keeps the clone fast)
+git clone -b sft-training --single-branch https://github.com/The-Only-Lazy-Guy/PROJECT.git
+cd PROJECT
+
+# 2. Install unsloth WITHOUT touching the pre-installed torch
+pip install --no-deps unsloth
+
+# 3. Install runtime deps (compatible with torch 2.4 through 2.11)
 pip install -r requirements-train.txt
 
-# 3. Train (writes adapter to adapters/qwen3_4b_v35_run1/)
+# 4. Train (writes adapter to adapters/qwen3_4b_v35_run1/)
 python _sft_train.py \
     --dataset data/sft_dataset/train.jsonl \
     --output_dir adapters/qwen3_4b_v35_run1
 
-# 4. Evaluate on held-out fictional graphs
+# 5. Evaluate on held-out fictional graphs
 python _sft_eval.py \
     --adapter adapters/qwen3_4b_v35_run1 \
     --output_path results/eval_run1.json \
     --also_baseline                    # also runs vanilla Qwen3-Instruct for comparison
 
-# 5. Export merged GGUF for edge serving
+# 6. Export merged GGUF for edge serving
 python _sft_export_to_gguf.py \
     --adapter adapters/qwen3_4b_v35_run1 \
     --output cache/models/Qwen3-4B-v35-SFT-Q4_K_M.gguf
 ```
 
+**Do not** install `flash-attn`. unsloth falls back to PyTorch SDPA,
+which is nearly identical speed on a 4B model at 4K context and avoids
+a ~30-minute source build that frequently fails on rental boxes.
+
+If your box has NO torch installed yet, replace step 2 with the bundled
+unsloth extras line that matches your CUDA + GPU
+(`unsloth[cu121-ampere-torch240]`, `unsloth[cu124-ampere-torch251]`, etc.)
+— see the top of `requirements-train.txt`.
+
 Expected wall times on a 4090 (24 GB) or A4000 (16 GB):
-- Step 3 (training, 98 examples × 2 epochs): **30–60 min**
-- Step 4 (eval, 6 cells × 3 samples × 2 models): **5–10 min**
-- Step 5 (merge + GGUF conversion): **5–10 min**
+- Step 4 (training, 98 examples × 2 epochs): **30–60 min**
+- Step 5 (eval, 6 cells × 3 samples × 2 models): **5–10 min**
+- Step 6 (merge + GGUF conversion): **5–10 min**
 
 Total compute cost on RunPod / Lambda: **~$1–3** per full pipeline run.
 
