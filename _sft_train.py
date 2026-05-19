@@ -78,13 +78,24 @@ def load_dataset(path: str, eval_split_ratio: float, seed: int):
     return train_records, eval_records
 
 
-def to_hf_dataset(records: list[dict]):
+def to_hf_dataset(records: list[dict], tokenizer):
     """Convert our records (containing 'messages' and 'meta') into a HF
-    Dataset that unsloth/TRL can consume. We drop 'meta' for training
-    (it's not part of the training signal).
+    Dataset that unsloth/TRL can consume. We pre-apply the chat template
+    here and emit a plain `text` column — modern TRL's SFTTrainer wants
+    either a `formatting_func` returning a list of strings (batched API)
+    or a pre-formatted `dataset_text_field`. The latter is simpler and
+    more robust across TRL versions.
     """
     from datasets import Dataset
-    return Dataset.from_list([{"messages": r["messages"]} for r in records])
+    rows = []
+    for r in records:
+        text = tokenizer.apply_chat_template(
+            r["messages"],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        rows.append({"text": text})
+    return Dataset.from_list(rows)
 
 
 def main():
@@ -135,20 +146,8 @@ def main():
     train_recs, eval_recs = load_dataset(
         args.dataset, args.eval_split_ratio, args.seed,
     )
-    train_ds = to_hf_dataset(train_recs)
-    eval_ds = to_hf_dataset(eval_recs)
-
-    # Loss-masked-prompt: the chat template marks the assistant turn boundary;
-    # TRL's SFTTrainer with `formatting_func` on chat-template messages handles
-    # masking automatically as long as we pass `dataset_text_field` correctly.
-    # We use the conversational format directly.
-    def formatting_func(example):
-        # Apply chat template per example. Returns the full templated string.
-        return tokenizer.apply_chat_template(
-            example["messages"],
-            tokenize=False,
-            add_generation_prompt=False,
-        )
+    train_ds = to_hf_dataset(train_recs, tokenizer)
+    eval_ds = to_hf_dataset(eval_recs, tokenizer)
 
     sft_config = SFTConfig(
         output_dir=str(out_dir),
@@ -174,8 +173,7 @@ def main():
         report_to="none",
         max_seq_length=args.max_seq_length,
         packing=False,                     # keep examples separate; small corpus, packing risks confusion
-        dataset_text_field=None,
-        dataset_kwargs={"skip_prepare_dataset": False},
+        dataset_text_field="text",
     )
 
     # Custom callback to dump the loss curve to JSON for later inspection.
@@ -204,7 +202,6 @@ def main():
         tokenizer=tokenizer,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        formatting_func=formatting_func,
         args=sft_config,
         callbacks=[LossLogger()],
     )
