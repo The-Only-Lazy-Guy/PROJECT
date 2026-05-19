@@ -111,6 +111,10 @@ def parse_args():
     ap.add_argument("--rescore_from",
                     help="Skip generation; reload an existing eval JSON and recompute the rubric only. "
                          "Use this to apply scoring fixes without burning GPU time. No model loading required.")
+    ap.add_argument("--prompt_mode", choices=["full", "short"], default="full",
+                    help="Directive density at inference. 'full' = the 60-line v3.5 directive used at training time. "
+                         "'short' = ~3-line directive — probes whether SFT internalized the structure or whether "
+                         "the directive alone was doing all the work.")
     return ap.parse_args()
 
 
@@ -261,8 +265,9 @@ def main():
               "(For offline re-scoring, use --rescore_from <path>.)")
         return
 
-    from _anchor_filtered_prompt import build_v35_prompt_filtered
+    from _anchor_filtered_prompt import build_v35_prompt_filtered, build_v35_prompt_short
 
+    print(f"Prompt mode: {args.prompt_mode}")
     print("Importing unsloth, transformers...")
     from unsloth import FastLanguageModel
 
@@ -311,11 +316,17 @@ def main():
         model, tokenizer = load_model_with_adapter(adapter_path)
         for cell_idx, (graph_stem, qkey, question, probes) in enumerate(EVAL_CELLS, 1):
             graph_path = f"graphs/{graph_stem}.json"
-            prompt, _ = build_v35_prompt_filtered(
-                question, graph_path,
-                k_anchors=12, hop=1,
-                inject_hypothesis_pool=False,
-            )
+            if args.prompt_mode == "short":
+                prompt, _ = build_v35_prompt_short(
+                    question, graph_path,
+                    k_anchors=12, hop=1,
+                )
+            else:
+                prompt, _ = build_v35_prompt_filtered(
+                    question, graph_path,
+                    k_anchors=12, hop=1,
+                    inject_hypothesis_pool=False,
+                )
             node_ids = load_node_ids(graph_stem)
             for sample_idx in range(1, args.samples_per_cell + 1):
                 print(f"[{model_label}] cell {cell_idx}/{len(EVAL_CELLS)} sample {sample_idx}: {graph_stem}::{qkey}")

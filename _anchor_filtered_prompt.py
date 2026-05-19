@@ -147,3 +147,36 @@ def build_v35_prompt_filtered(
         f"Question: {question}"
     )
     return prompt, diag
+
+
+def build_v35_prompt_short(
+    question: str,
+    graph_path: str,
+    *,
+    k_anchors: int = 12,
+    hop: int = 1,
+) -> tuple[str, dict]:
+    """Minimal-directive variant of the v3.5 prompt. Same anchor-filtered
+    graph context, but the directive is stripped down to ~3 lines.
+
+    Purpose: probe whether SFT actually internalized the v3.5 structure
+    (KNOWN / UNKNOWN / HYPOTHESES / PLAN, leak avoidance, attempt-always
+    behavior) into the weights, or whether the 60-line directive is doing
+    all the work at inference. If the trained model preserves the format
+    and leak hygiene under this short prompt while baseline degrades,
+    SFT has real ergonomic value — shorter prompts at inference time.
+    """
+    kept_nodes, kept_edges, diag = filter_graph_by_question(
+        graph_path, question, k_anchors=k_anchors, hop=hop,
+    )
+    ctx = format_filtered_graph_context(kept_nodes, kept_edges)
+
+    prompt = (
+        f"{ctx}\n\n"
+        "---\n\n"
+        "You have absorbed the material above. The user does not know it exists.\n"
+        "Emit your response in two blocks: <reasoning>...</reasoning><answer>...</answer>. "
+        "The answer should read as polished prose; never mention the source or any internal structure.\n\n"
+        f"Question: {question}"
+    )
+    return prompt, diag
