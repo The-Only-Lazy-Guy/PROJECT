@@ -69,15 +69,31 @@ def filter_graph_by_question(
 
 
 def format_filtered_graph_context(kept_nodes: list[dict], kept_edges: list[dict]) -> str:
-    """Same atomic-node format used by build_v35_prompt, but on a subset."""
-    lines = ["# Reference material", "", "## Facts", ""]
+    """Render kept nodes as background facts.
+
+    Design note (2026-05-19): we deliberately do NOT include node IDs or
+    edge syntax in the prompt. Earlier renders used `### [node_id]
+    type=fact` headers and `id1 --[support]--> id2` edge lines. Both
+    leak: the model treats the IDs as addressable handles and parrots
+    them in answers (e.g. backtick-quoting `dijkstra_with_negative_edges_false`).
+    Telling the directive 'never mention identifiers' loses against a
+    prompt that demonstrates them on every line.
+
+    The model reasons about node *text*. IDs are a debug aid for humans,
+    not a reasoning aid. We keep `type=` so the model still knows which
+    fact is the worked example vs the misconception vs the summary.
+
+    Relationships are intentionally omitted in this v1 cleanup — once
+    relevant nodes are co-located in context, the support/refine/example_of
+    structure is largely redundant. If eval degrades, re-add as
+    natural-language prose (no IDs) via a future pass.
+    """
+    lines = ["# Background facts", ""]
     for node in kept_nodes:
-        lines.append(f"### [{node['id']}] type={node['node_type']}")
+        ntype = node.get("node_type", "fact")
+        lines.append(f"### type={ntype}")
         lines.append(str(node.get("text", "")).strip())
         lines.append("")
-    lines.append("## Relationships")
-    for edge in kept_edges:
-        lines.append(f"- {edge['src']} --[{edge['relation']}]--> {edge['dst']}")
     return "\n".join(lines).strip()
 
 
