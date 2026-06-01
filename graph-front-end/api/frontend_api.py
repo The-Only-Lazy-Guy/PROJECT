@@ -8,7 +8,6 @@ import sys
 import time
 import uuid
 import threading
-import asyncio
 from collections import Counter
 from pathlib import Path
 from queue import Queue
@@ -856,6 +855,7 @@ def _run_graph_agent_v4(req: RunRequest, emit: Optional[EmitFn] = None) -> Dict[
         },
         "session_root": _session_subgraph_root(),
         "signature_stats_dir": BACKEND_DIR / "data" / "signature_stats",
+        "event_callback": emit,
         "controller_label": os.environ.get("V4_MODEL", "opencode/big-pickle"),
     }
     if auto_config:
@@ -1148,73 +1148,6 @@ async def stream_graph_agent(req: RunRequest) -> StreamingResponse:
         raise _json_error(
             503,
             "Model runtime is not available. Configure the runtime command before running chat.",
-        )
-
-    if _reasoning_mode() == "v4":
-        auto_config = os.environ.get("V4_AUTO_CONFIG", "1").strip() not in ("0", "false", "no")
-
-        async def event_stream_v4():
-            yield _sse("ready", {"ok": True, "provider": "model"})
-            await asyncio.sleep(0)
-            yield _sse("started", {
-                "run_id": "pending",
-                "graph_id": req.graph_id,
-                "reasoning_mode": "v4",
-            })
-            await asyncio.sleep(0)
-            yield _sse("action_start", {
-                "action": "V4_REASONING_RUN",
-                "reasoning_mode": "v4",
-            })
-            await asyncio.sleep(0)
-            if auto_config:
-                try:
-                    level = _CLASSIFIER.classify(req.question)[0]
-                    yield _sse("log", {"message": f"Classified as: {level}"})
-                    await asyncio.sleep(0)
-                except Exception:
-                    pass
-
-            try:
-                final_payload = _run_graph_agent(req)
-                session = final_payload.get("session", {})
-                nodes = session.get("nodes", {}) if isinstance(session, dict) else {}
-                edges = session.get("edges", []) if isinstance(session, dict) else []
-                yield _sse("session_graph", {
-                    "node_count": len(nodes),
-                    "edge_count": len(edges),
-                    "stage": "final",
-                    "iteration": final_payload.get("steps_taken", 0),
-                    "anchor_count": final_payload.get("metrics", {}).get("anchor_count", 0),
-                })
-                yield _sse("action_complete", {
-                    "action": "V4_REASONING_RUN",
-                    "content": final_payload.get("answer", ""),
-                    "steps": final_payload.get("steps_taken", 0),
-                    "tool_call_count": final_payload.get("packet", {}).get("tool_call_count", 0),
-                })
-                for invoc in final_payload.get("procedure_invocations", []) or []:
-                    yield _sse("tool_result", {
-                        "tool_name": "invoke_procedure",
-                        "procedure_name": invoc.get("procedure"),
-                        "success": invoc.get("error") is None,
-                        "error": invoc.get("error"),
-                        "summary": f"{invoc.get('procedure')} - {invoc.get('mutations_applied', 0)} mutations",
-                    })
-                yield _sse("final", final_payload)
-            except Exception as exc:
-                import traceback
-                print(f"[stream-v4] ERROR: {type(exc).__name__}: {exc}", flush=True)
-                traceback.print_exc()
-                yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
-
-        return StreamingResponse(
-            event_stream_v4(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
         )
 
     events: Queue[Optional[tuple[str, Dict[str, Any]]]] = Queue()

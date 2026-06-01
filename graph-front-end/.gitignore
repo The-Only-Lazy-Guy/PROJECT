@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+artifacts/
+cache/
+data/
+project/
+__pycache__/
+*.pyc
+*.log
+*.tsbuildinfo
+*.zip
+.env

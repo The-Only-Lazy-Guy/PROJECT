@@ -153,11 +153,18 @@ class TestFrontendApiModes(unittest.TestCase):
         )
 
         with patch.dict(os.environ, {"REASONING_MODE": "v4"}, clear=False):
+            events = []
             with patch("api.frontend_api.answer_query_v4", return_value=fake_packet) as answer_call:
-                payload = _run_graph_agent(self._req())
+                payload = _run_graph_agent(
+                    self._req(),
+                    emit=lambda event, data: events.append((event, data)),
+                )
 
         kwargs = answer_call.call_args.kwargs
         self.assertTrue(kwargs["collect_corpus"])
+        self.assertTrue(callable(kwargs["event_callback"]))
+        kwargs["event_callback"]("model_turn", {"step": 1})
+        self.assertEqual(events[-1], ("model_turn", {"step": 1}))
         self.assertIn("graph_v5", str(kwargs["corpus_root"]))
         self.assertEqual(Path(kwargs["corpus_root"]).name, "distillation_corpus")
         self.assertIn("graph_v5", str(kwargs["session_root"]))
